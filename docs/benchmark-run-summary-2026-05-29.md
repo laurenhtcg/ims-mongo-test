@@ -18,29 +18,106 @@ All jobs used **`FILTER_TESTS`** and **`STATIC_BENCH_SELLER_KEYS`** from `benchm
 
 ## 1. Document shape and collection setup
 
-### 1.1 Document shape (from `merge_all`)
+### 1.1 Document shape
 
-Inventory lines are merged from `seller_inventory_raw` with a `$lookup` into `product_catalog_raw`. Each bench document includes:
+All collections use the following document shape for testing:
 
-| Top-level | Purpose |
-|-----------|---------|
-| `_id` | Source inventory document id |
-| `sellerKey` | Tenant / seller partition (always used first in benchmarks) |
-| `pamKey` | Present on documents; indexed as `token` on **`bench_search`** only |
-| `inventory` | `quantity`, `reserveQuantity`, `lastUpdated` |
-| `product` | `id`, `name`, `productLine`, `set`, `cardNumber`, `language`, `printing`, `rarity`, `type` (denormalized strings suitable for `$match` and Search) |
+```json
+{
+  "_id": "0009b887:X0BLjZ9aw6dwLHpV0z5q7VAmn",
+  "pamKey": "X0BLjZ9aw6dwLHpV0z5q7VAmn",
+  "sellerKey": "0009b887",
+  "inventory": {
+    "quantity": 16,
+    "reserveQuantity": 1,
+    "lastUpdated": "2026-03-13T14:49:21.964830+00:00"
+  },
+  "product": {
+    "id": "gsWbww83fwQpjaMFBZRv6Vw",
+    "name": "Icefall",
+    "productLine": "Magic The Gathering TCG",
+    "set": "Coldsnap",
+    "cardNumber": "85",
+    "language": "Japanese",
+    "printing": "Normal",
+    "rarity": "Common",
+    "type": "Card Single"
+  }
+}
+```
 
-The same logical documents are written to **`bench_wildcard`**, **`bench_index`**, and **`bench_search`** via `merge_all`; only **MongoDB indexes** and **Atlas Search index definitions** differ per collection.
+The `merge_all` job (when run against sandbox) can populate each of the collections with data pulled from raw feeds. When running in a local mongo container the collections would need to be generated.
 
 ### 1.2 Three benchmark collections (authoritative: `bench_collections.json`)
 
-| Collection | MongoDB indexes | Atlas Search index |
-|------------|-----------------|---------------------|
-| **`bench_wildcard`** | **`bench_wildcard_sellerKey_paths`**: compound of `sellerKey` ascending + `$**` wildcard, with `wildcardProjection` on `product.productLine`, `product.set`, `product.language`, `product.printing`, `product.rarity`, `product.type`, and `inventory.quantity`. | **`bench_text`**: `dynamic: false`; `sellerKey` as `token` (lowercase normalizer); nested `product` document with `name`, `productLine`, and `set` each mapped as `string` (lucene.standard), `token` (lowercase), and `autocomplete` (nGram 2–15). |
-| **`bench_index`** | **`bench_compound`**: compound key order `sellerKey`, `product.productLine`, `product.set`, `product.language`, `product.printing`, `product.rarity`, `product.type`, `inventory.quantity`. | Same **`bench_text`** mapping as `bench_wildcard`. |
-| **`bench_search`** | **None** in the spec (namespace created for Atlas-only workloads). | **`bench_search_index`**: `dynamic: false`; explicit `pamKey` and `sellerKey` as `token`; `inventory` as `document` with `lastUpdated` (date), `quantity` / `reserveQuantity` (number); `product` as `document` with typed fields including **`productLine` and `set` as `token` plus `string` with `lucene.keyword`** (for reliable `in` / equals-style filters), `name` as `token` + `string` (standard) + `autocomplete`, and other facets as `token` where listed. |
+There are 3 collections created for different scenarios:
+
+|collection|purpose|
+|---|---|
+|`bench_index`|test use of **compound index** for filters, additional **atlas index** for text-only fields (`product.name`) to allow free-text search. Search pipeline is either `$match` only or `$search`->`$match`|
+|`bench_wildcard`|test use of **wildcard index** for filters, additional **atlas index** for text-only fields (`product.name`) to allow free-text search. Search pipeline is either `$match` only or `$search`->`$match`|
+|`bench_search`|test use of **atlas search index only** - all search paths go through `$search` aggregation|
+
+Specifications for the collections can be found and edited in `bench_collections.json`.
 
 Re-run **`mongo-bench init`** (or apply `bench_schema`) after editing `bench_collections.json` so Mongo and Atlas definitions stay aligned.
+
+### 1.2.1 `bench_index` collection
+
+This collection is the bases for testing a **compound index** approach using sentinel values to ensure index usage. Here is an [article](https://medium.com/mongodb/searching-mongodb-by-arbitrary-combinations-of-fields-0c9e64bd1e00) explaining this approach.
+
+The collection is created with this index specification:
+
+```json
+{
+  "keys": [
+    ["sellerKey", 1],
+    ["product.productLine", 1],
+    ["product.set", 1],
+    ["product.language", 1],
+    ["product.printing", 1],
+    ["product.rarity", 1],
+    ["product.type", 1],
+    ["inventory.quantity", 1]
+  ],
+  "options": {
+    "name": "bench_compound"
+  }
+}
+```
+
+### 1.2.2 `bench_wildcard` collection
+
+This collection is used to test the [wildcard index](https://www.mongodb.com/docs/manual/core/indexes/index-types/index-wildcard/index-wildcard-compound/#filter-fields-with-a-wildcardprojection). 
+
+This collection is created with this index specification:
+
+```json
+{
+  "keys": [
+    ["sellerKey", 1],
+    ["$**", 1]
+  ],
+  "options": {
+    "name": "bench_wildcard_sellerKey_paths",
+    "wildcardProjection": {
+      "product.productLine": 1,
+      "product.set": 1,
+      "product.language": 1,
+      "product.printing": 1,
+      "product.rarity": 1,
+      "product.type": 1,
+      "inventory.quantity": 1
+    }
+  }
+}
+```
+
+### 1.2.3 `bench_search` collection
+
+This collection is made to test using **only** atlas search for all scenarios. 
+
+The atlas index specification can be found in `bench_collections.json`
 
 ### 1.3 Physical size and MongoDB indexes (MongoDB Compass)
 
