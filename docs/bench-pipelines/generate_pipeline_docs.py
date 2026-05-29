@@ -179,7 +179,7 @@ def main() -> None:
 
         **Regenerate** after changing `FILTER_TESTS` or pipeline builders::
 
-            cd /path/to/mongo-test
+            cd /path/to/this-repository
             PYTHONPATH=src python3 docs/bench-pipelines/generate_pipeline_docs.py
 
         Canonical index and field definitions: `src/mongo_bench/resources/bench_collections.json`. Run summary: [benchmark-run-summary-2026-05-29.md](../benchmark-run-summary-2026-05-29.md).

@@ -16,10 +16,9 @@ Scaffold for running MongoDB search benchmark jobs. Populate and benchmark logic
 
 Create a virtual environment, install the package in editable mode, then invoke the module or the console script.
 
-Put connection settings in a **`.env`** file in the current working directory (usually `mongo-test/.env`) or next to the project root when using an editable install. The app loads it on first settings read via **python-dotenv** (existing shell variables are not overwritten). Optional: set **`MONGO_BENCH_DOTENV`** to an absolute path to a specific env file.
+Put connection settings in a **`.env`** file in the current working directory (the project root, next to `pyproject.toml`) or next to the project root when using an editable install. The app loads it on first settings read via **python-dotenv** (existing shell variables are not overwritten). Optional: set **`MONGO_BENCH_DOTENV`** to an absolute path to a specific env file.
 
 ```bash
-cd mongo-test
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
@@ -56,12 +55,11 @@ docker compose build job-populate-default
 
 Job images read **`os.environ`** (`mongo_bench.config.load_settings`). Compose passes variables from the `environment:` block, which uses **substitution**: `MONGODB_URI: ${MONGODB_URI:-mongodb://mongo:27017}` means “use host/shell `MONGODB_URI` if set, else default to the `mongo` service”.
 
-Docker Compose **automatically loads** a file named **`.env`** in the **same directory as `docker-compose.yml`** (`mongo-test/.env`) when resolving `${…}`. Put your sandbox URI and DB name there (do not commit real secrets). Exporting variables in your shell **overrides** the same keys from `.env`.
+Docker Compose **automatically loads** a file named **`.env`** in the **same directory as `docker-compose.yml`** (the project root) when resolving `${…}`. Put your sandbox URI and DB name there (do not commit real secrets). Exporting variables in your shell **overrides** the same keys from `.env`.
 
 - **External MongoDB / Atlas sandbox** — use your `.env` (or exports), then run **without** starting the bundled DB:
 
   ```bash
-  cd mongo-test
   docker compose run --no-deps --rm job-populate-default
   ```
 
@@ -70,7 +68,6 @@ Docker Compose **automatically loads** a file named **`.env`** in the **same dir
 - **Local Mongo from Compose** — leave `MONGODB_URI` unset in `.env` (or unset in shell) so the default `mongodb://mongo:27017` applies, start Mongo, then run:
 
   ```bash
-  cd mongo-test
   docker compose up -d mongo
   docker compose run --rm job-populate-default
   ```
@@ -126,10 +123,10 @@ Commands:
   (add `--no-deps` when using an external `MONGODB_URI` from `.env`).
 - `mongo-bench populate …` and `mongo-bench bench …` — **ensure the same schema by default** before running the job. Use `--skip-schema` to skip if you know the cluster is already prepared.
 
-Atlas Search index creation uses PyMongo’s `createSearchIndexes` command and **requires MongoDB 7.0+ on Atlas** with Search enabled on the cluster. The bundled `docker-compose.yml` defaults `MONGO_BENCH_SKIP_SEARCH_INDEXES` to **1** when the variable is unset; set **`MONGO_BENCH_SKIP_SEARCH_INDEXES=0`** in `mongo-test/.env` (or your shell) for Atlas runs. If indexes still do not appear, check **stderr** for `mongo-bench:` lines: a **code 59** / “no such command” message means the host is not Atlas Search–capable (e.g. self-managed or wrong URI tier).
+Atlas Search index creation uses PyMongo’s `createSearchIndexes` command and **requires MongoDB 7.0+ on Atlas** with Search enabled on the cluster. The bundled `docker-compose.yml` defaults `MONGO_BENCH_SKIP_SEARCH_INDEXES` to **1** when the variable is unset; set **`MONGO_BENCH_SKIP_SEARCH_INDEXES=0`** in `.env` at the project root (or your shell) for Atlas runs. If indexes still do not appear, check **stderr** for `mongo-bench:` lines: a **code 59** / “no such command” message means the host is not Atlas Search–capable (e.g. self-managed or wrong URI tier).
 
 ## Environment
 
 See [.env.example](.env.example). `MONGODB_URI` and `MONGODB_DB` are read after optional `.env` loading in `mongo_bench.config` (see **Local usage**). `MONGO_BENCH_SKIP_SEARCH_INDEXES` skips Atlas Search index steps when using a non-Atlas deployment.
 
-For **Docker job runs**, place the same variables in `mongo-test/.env` (next to `docker-compose.yml`) so Compose substitutes them into the container environment (see **Docker usage** above). If your `.env` lives elsewhere, run from `mongo-test` with `docker compose --env-file /path/to/.env run …` so interpolation picks up those values.
+For **Docker job runs**, place the same variables in `.env` next to `docker-compose.yml` so Compose substitutes them into the container environment (see **Docker usage** above). If your `.env` lives elsewhere, run from the project directory with `docker compose --env-file /path/to/.env run …` so interpolation picks up those values.
