@@ -7,15 +7,16 @@ Atlas Search only (no MongoDB `$match`). Index: `bench_search_index`. Facet filt
 ## Conventions
 
 - **`<SELLER_KEY>`** — replace with the `sellerKey` being benchmarked for that row.
-- **Atlas index name** and **text query** use this job’s Python defaults; override with environment variables documented on `mongo_bench.jobs.benchmarks.search_atlas` (e.g. `BENCH_SEARCH_COLLECTION`, `BENCH_SEARCH_ATLAS_INDEX`, `BENCH_ATLAS_TEXT_QUERY`).
-- **`run_timed_count`** (in `benchmark_fixtures.py`) appends `{"$count": "c"}` to the pipeline for timing and count; that stage is **not** shown below.
+- **Atlas index name** — set via environment variables documented on `mongo_bench.jobs.benchmarks.search_atlas` (e.g. `BENCH_SEARCH_COLLECTION`, `BENCH_SEARCH_ATLAS_INDEX`).
+- **Name search query** — when a pipeline includes Atlas ``text`` on ``product.name``, the string comes from the ``text`` key in each merged benchmark case (`TEST_CASES` × `FILTER_TESTS` in ``benchmark_fixtures.py``), not from an environment variable.
+- **`BenchmarkSession.timed`** (in `benchmark_session.py`) appends `{"$count": "c"}` to the pipeline for timing and count; that stage is **not** shown below.
 
 ---
 
 
 ## `FILTER_TESTS` parameter dicts (from `benchmark_fixtures.py`)
 
-### `seller_only`
+### `no_filters`
 
 ```json
 {}
@@ -61,7 +62,7 @@ Atlas Search only (no MongoDB `$match`). Index: `bench_search_index`. Facet filt
 }
 ```
 
-### `sparse_filters`
+### `line_and_rarity`
 
 ```json
 {
@@ -75,7 +76,7 @@ Atlas Search only (no MongoDB `$match`). Index: `bench_search_index`. Facet filt
 }
 ```
 
-### `multiple_languages`
+### `line_and_languages`
 
 ```json
 {
@@ -113,23 +114,21 @@ Atlas Search only (no MongoDB `$match`). Index: `bench_search_index`. Facet filt
 }
 ```
 
-### `rare_product_lines`
+### `rare_product_line`
 
 ```json
 {
   "product_line": [
-    "Union Arena",
-    "Argent Saga TCG",
     "Warhammer Age of Sigmar Champions TCG"
   ]
 }
 ```
 
-## Pipelines per CSV label
+## Pipelines per `FILTER_TESTS` row (representative `TEST_CASES` shapes)
 
-### `atlas_only_seller_only`
+Each benchmark row uses :meth:`mongo_bench.jobs.benchmarks.benchmark_session.BenchmarkSession.iter_test_cases`; below, **no-text** omits `text` (facet-only `$search`), **with-text** sets `text` to the sample query.
 
-Facet filters in `compound.filter` only (no `must` text on `product.name`).
+### `no_filters` — no `text` in case dict
 
 ```json
 [
@@ -151,9 +150,7 @@ Facet filters in `compound.filter` only (no `must` text on `product.name`).
 ]
 ```
 
-### `atlas_plus_text_seller_only`
-
-Same filters plus `compound.must` with `text` on `product.name` when `BENCH_ATLAS_TEXT_QUERY` is non-blank after strip.
+### `no_filters` — with `text` = `Dragon`
 
 ```json
 [
@@ -183,9 +180,7 @@ Same filters plus `compound.must` with `text` on `product.name` when `BENCH_ATLA
 ]
 ```
 
-### `atlas_only_multiple_filters_mtg`
-
-Facet filters in `compound.filter` only (no `must` text on `product.name`).
+### `multiple_filters_mtg` — no `text` in case dict
 
 ```json
 [
@@ -240,9 +235,7 @@ Facet filters in `compound.filter` only (no `must` text on `product.name`).
 ]
 ```
 
-### `atlas_plus_text_multiple_filters_mtg`
-
-Same filters plus `compound.must` with `text` on `product.name` when `BENCH_ATLAS_TEXT_QUERY` is non-blank after strip.
+### `multiple_filters_mtg` — with `text` = `Dragon`
 
 ```json
 [
@@ -305,9 +298,7 @@ Same filters plus `compound.must` with `text` on `product.name` when `BENCH_ATLA
 ]
 ```
 
-### `atlas_only_multiple_filters_pkm`
-
-Facet filters in `compound.filter` only (no `must` text on `product.name`).
+### `multiple_filters_pkm` — no `text` in case dict
 
 ```json
 [
@@ -362,9 +353,7 @@ Facet filters in `compound.filter` only (no `must` text on `product.name`).
 ]
 ```
 
-### `atlas_plus_text_multiple_filters_pkm`
-
-Same filters plus `compound.must` with `text` on `product.name` when `BENCH_ATLAS_TEXT_QUERY` is non-blank after strip.
+### `multiple_filters_pkm` — with `text` = `Dragon`
 
 ```json
 [
@@ -427,9 +416,7 @@ Same filters plus `compound.must` with `text` on `product.name` when `BENCH_ATLA
 ]
 ```
 
-### `atlas_only_sparse_filters`
-
-Facet filters in `compound.filter` only (no `must` text on `product.name`).
+### `line_and_rarity` — no `text` in case dict
 
 ```json
 [
@@ -468,9 +455,7 @@ Facet filters in `compound.filter` only (no `must` text on `product.name`).
 ]
 ```
 
-### `atlas_plus_text_sparse_filters`
-
-Same filters plus `compound.must` with `text` on `product.name` when `BENCH_ATLAS_TEXT_QUERY` is non-blank after strip.
+### `line_and_rarity` — with `text` = `Dragon`
 
 ```json
 [
@@ -517,9 +502,7 @@ Same filters plus `compound.must` with `text` on `product.name` when `BENCH_ATLA
 ]
 ```
 
-### `atlas_only_multiple_languages`
-
-Facet filters in `compound.filter` only (no `must` text on `product.name`).
+### `line_and_languages` — no `text` in case dict
 
 ```json
 [
@@ -566,9 +549,7 @@ Facet filters in `compound.filter` only (no `must` text on `product.name`).
 ]
 ```
 
-### `atlas_plus_text_multiple_languages`
-
-Same filters plus `compound.must` with `text` on `product.name` when `BENCH_ATLAS_TEXT_QUERY` is non-blank after strip.
+### `line_and_languages` — with `text` = `Dragon`
 
 ```json
 [
@@ -623,9 +604,7 @@ Same filters plus `compound.must` with `text` on `product.name` when `BENCH_ATLA
 ]
 ```
 
-### `atlas_only_product_line_only`
-
-Facet filters in `compound.filter` only (no `must` text on `product.name`).
+### `product_line_only` — no `text` in case dict
 
 ```json
 [
@@ -655,9 +634,7 @@ Facet filters in `compound.filter` only (no `must` text on `product.name`).
 ]
 ```
 
-### `atlas_plus_text_product_line_only`
-
-Same filters plus `compound.must` with `text` on `product.name` when `BENCH_ATLAS_TEXT_QUERY` is non-blank after strip.
+### `product_line_only` — with `text` = `Dragon`
 
 ```json
 [
@@ -695,9 +672,7 @@ Same filters plus `compound.must` with `text` on `product.name` when `BENCH_ATLA
 ]
 ```
 
-### `atlas_only_product_line_with_quantity`
-
-Facet filters in `compound.filter` only (no `must` text on `product.name`).
+### `product_line_with_quantity` — no `text` in case dict
 
 ```json
 [
@@ -733,9 +708,7 @@ Facet filters in `compound.filter` only (no `must` text on `product.name`).
 ]
 ```
 
-### `atlas_plus_text_product_line_with_quantity`
-
-Same filters plus `compound.must` with `text` on `product.name` when `BENCH_ATLAS_TEXT_QUERY` is non-blank after strip.
+### `product_line_with_quantity` — with `text` = `Dragon`
 
 ```json
 [
@@ -779,9 +752,7 @@ Same filters plus `compound.must` with `text` on `product.name` when `BENCH_ATLA
 ]
 ```
 
-### `atlas_only_rare_product_lines`
-
-Facet filters in `compound.filter` only (no `must` text on `product.name`).
+### `rare_product_line` — no `text` in case dict
 
 ```json
 [
@@ -800,8 +771,6 @@ Facet filters in `compound.filter` only (no `must` text on `product.name`).
             "in": {
               "path": "product.productLine",
               "value": [
-                "Union Arena",
-                "Argent Saga TCG",
                 "Warhammer Age of Sigmar Champions TCG"
               ]
             }
@@ -813,9 +782,7 @@ Facet filters in `compound.filter` only (no `must` text on `product.name`).
 ]
 ```
 
-### `atlas_plus_text_rare_product_lines`
-
-Same filters plus `compound.must` with `text` on `product.name` when `BENCH_ATLAS_TEXT_QUERY` is non-blank after strip.
+### `rare_product_line` — with `text` = `Dragon`
 
 ```json
 [
@@ -834,8 +801,6 @@ Same filters plus `compound.must` with `text` on `product.name` when `BENCH_ATLA
             "in": {
               "path": "product.productLine",
               "value": [
-                "Union Arena",
-                "Argent Saga TCG",
                 "Warhammer Age of Sigmar Champions TCG"
               ]
             }

@@ -1,6 +1,6 @@
 {
   "title": "mongo-bench benchmark collections",
-  "description": "Authoritative layout for bench_wildcard, bench_index, and bench_search: collections, MongoDB indexes, and Atlas Search index definitions. Reference this file from test plans and docs; tune field paths when your document shapes are fixed.",
+  "description": "Authoritative layout for bench_wildcard, bench_index, bench_attributes, and bench_search: collections, MongoDB indexes, and Atlas Search index definitions. Reference this file from test plans and docs; tune field paths when your document shapes are fixed.",
   "schema_version": 1,
   "collections": [
     {
@@ -11,13 +11,15 @@
           "documentation": "Prefix field sellerKey plus $** wildcard with wildcardProjection (MongoDB compound wildcard index; see https://www.mongodb.com/docs/manual/core/index-wildcard/). Paths align with merge_all product.* and inventory.quantity.",
           "keys": [
             ["sellerKey", 1],
-            ["$**", 1]
+            ["$**", 1],
+            ["_id", 1]
           ],
           "options": {
             "name": "bench_wildcard_sellerKey_paths",
             "wildcardProjection": {
               "product.productLine": 1,
               "product.set": 1,
+              "product.name": 1,
               "product.language": 1,
               "product.printing": 1,
               "product.rarity": 1,
@@ -113,14 +115,110 @@
             ["sellerKey", 1],
             ["product.productLine", 1],
             ["product.set", 1],
+            ["product.name", 1],
             ["product.language", 1],
             ["product.printing", 1],
             ["product.rarity", 1],
             ["product.type", 1],
-            ["inventory.quantity", 1]
+            ["inventory.quantity", 1],
+            ["_id", 1]
           ],
           "options": {
             "name": "bench_compound"
+          }
+        }
+      ],
+      "atlas_search_indexes": [
+        {
+          "name": "bench_text",
+          "documentation": "Text search on selected string fields; nested product uses type document (dynamic false).",
+          "definition": {
+            "mappings": {
+              "dynamic": false,
+              "fields": {
+                "sellerKey": [
+                  {
+                    "type": "token",
+                    "normalizer": "lowercase"
+                  }
+                ],
+                "product": {
+                  "type": "document",
+                  "fields": {
+                    "name": [
+                      {
+                        "type": "string",
+                        "analyzer": "lucene.standard"
+                      },
+                      {
+                        "type": "token",
+                        "normalizer": "lowercase"
+                      },
+                      {
+                        "type": "autocomplete",
+                        "tokenization": "nGram",
+                        "minGrams": 2,
+                        "maxGrams": 15,
+                        "foldDiacritics": true
+                      }
+                    ],
+                    "productLine": [
+                      {
+                        "type": "string",
+                        "analyzer": "lucene.standard"
+                      },
+                      {
+                        "type": "token",
+                        "normalizer": "lowercase"
+                      },
+                      {
+                        "type": "autocomplete",
+                        "tokenization": "nGram",
+                        "minGrams": 2,
+                        "maxGrams": 15,
+                        "foldDiacritics": true
+                      }
+                    ],
+                    "set": [
+                      {
+                        "type": "string",
+                        "analyzer": "lucene.standard"
+                      },
+                      {
+                        "type": "token",
+                        "normalizer": "lowercase"
+                      },
+                      {
+                        "type": "autocomplete",
+                        "tokenization": "nGram",
+                        "minGrams": 2,
+                        "maxGrams": 15,
+                        "foldDiacritics": true
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "bench_attributes",
+      "documentation": "Attribute-pattern documents (array of {key, value} pairs); compound index for seller + attribute filters and quantity; Atlas Search same as bench_index for comparable text queries on product.",
+      "indexes": [
+        {
+          "documentation": "Compound index on sellerKey, attribute key/value (multikey over attributes[]), and inventory.quantity for filter/sort patterns on the attribute pattern (see https://www.mongodb.com/developer/products/mongodb/schema-design-anti-pattern-massive-arrays/).",
+          "keys": [
+            ["sellerKey", 1],
+            ["attributes.key", 1],
+            ["attributes.value", 1],
+            ["inventory.quantity", 1],
+            ["_id", 1]
+          ],
+          "options": {
+            "name": "bench_attributes_compound"
           }
         }
       ],
@@ -212,16 +310,9 @@
             "mappings": {
               "dynamic": false,
               "fields": {
-                "pamKey": [
-                  {
-                    "type": "token"
-                  }
-                ],
-                "sellerKey": [
-                  {
-                    "type": "token"
-                  }
-                ],
+                "_id": { "type": "token" },
+                "pamKey": { "type": "token" },
+                "sellerKey": { "type": "token" },
                 "inventory": {
                   "type": "document",
                   "fields": {

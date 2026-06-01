@@ -43,8 +43,9 @@ def header(title: str, coll: str, job: str, extra: str = "", *, env_examples: st
         ## Conventions
 
         - **`{SK}`** — replace with the `sellerKey` being benchmarked for that row.
-        - **Atlas index name** and **text query** use this job’s Python defaults; override with environment variables documented on `mongo_bench.jobs.benchmarks.{job}` (e.g. {env_examples}).
-        - **`run_timed_count`** (in `benchmark_fixtures.py`) appends `{{"$count": "c"}}` to the pipeline for timing and count; that stage is **not** shown below.
+        - **Atlas index name** — set via environment variables documented on `mongo_bench.jobs.benchmarks.{job}` (e.g. {env_examples}).
+        - **Name search query** — when a pipeline includes Atlas ``text`` on ``product.name``, the string comes from the ``text`` key in each merged benchmark case (`TEST_CASES` × `FILTER_TESTS` in ``benchmark_fixtures.py``), not from an environment variable.
+        - **`BenchmarkSession.timed`** (in `benchmark_session.py`) appends `{{"$count": "c"}}` to the pipeline for timing and count; that stage is **not** shown below.
 
         ---
 
@@ -65,6 +66,7 @@ def filter_tests_md() -> str:
 def main() -> None:
     si = _load("search_index")
     sw = _load("search_wildcard")
+    sat = _load("search_attributes")
     sa = _load("search_atlas")
 
     compound_name = si._compound_search_name_stage(IDX_TEXT, SK, TQ)
@@ -78,7 +80,7 @@ def main() -> None:
             "bench_index",
             "search_index",
             "MongoDB compound index: `bench_compound`. Atlas Search index: `bench_text`. `$match` uses sentinel `$ne: \"XXXXXX\"` on unused facet fields when any facet is set.",
-            env_examples="`BENCH_INDEX_COLLECTION`, `BENCH_ATLAS_SEARCH_INDEX`, `BENCH_ATLAS_TEXT_QUERY`",
+            env_examples="`BENCH_INDEX_COLLECTION`, `BENCH_ATLAS_SEARCH_INDEX`",
         ),
         filter_tests_md(),
         "## Pipelines per CSV label\n",
@@ -108,7 +110,7 @@ def main() -> None:
             "bench_wildcard",
             "search_wildcard",
             "MongoDB wildcard index: `bench_wildcard_sellerKey_paths`. Atlas Search index: `bench_text`. `$match` includes **only** fields present in each `FILTER_TESTS` entry (no sentinels).",
-            env_examples="`BENCH_WILDCARD_COLLECTION`, `BENCH_ATLAS_SEARCH_INDEX`, `BENCH_ATLAS_TEXT_QUERY`",
+            env_examples="`BENCH_WILDCARD_COLLECTION`, `BENCH_ATLAS_SEARCH_INDEX`",
         ),
         filter_tests_md(),
         "## Pipelines per CSV label\n",
@@ -131,6 +133,36 @@ def main() -> None:
 
     (out_dir / "search-wildcard.md").write_text("\n".join(parts), encoding="utf-8")
 
+    # --- search_attributes ---
+    parts = [
+        header(
+            "`search_attributes` pipelines (`bench_attributes`)",
+            "bench_attributes",
+            "search_attributes",
+            "MongoDB compound index: `bench_attributes_compound` (``sellerKey``, ``attributes.key``, ``attributes.value``, ``inventory.quantity``). Atlas Search index: `bench_text`. ``$match`` uses ``$elemMatch`` on ``attributes`` for each facet dimension present in `FILTER_TESTS` (same keys as `merge_all._add_attributes`).",
+            env_examples="`BENCH_ATTRIBUTES_COLLECTION`, `BENCH_ATLAS_SEARCH_INDEX`",
+        ),
+        filter_tests_md(),
+        "## Pipelines per CSV label\n",
+        "### `atlas_compound_sellerKey_name`\n",
+        "Same `$search` shape as `search_index` (different collection / index definitions in `bench_collections.json`).\n",
+        "```json",
+        dumps([compound_name]),
+        "```\n",
+    ]
+    for test_name, params in FILTER_TESTS:
+        flt = sat.match_from_filter_test(SK, params)
+        parts.append(f"### `match_{test_name}`\n")
+        parts.append("```json")
+        parts.append(dumps([{"$match": flt}]))
+        parts.append("```\n")
+        parts.append(f"### `atlas_plus_match_{test_name}`\n")
+        parts.append("```json")
+        parts.append(dumps([compound_name, {"$match": flt}]))
+        parts.append("```\n")
+
+    (out_dir / "search-attributes.md").write_text("\n".join(parts), encoding="utf-8")
+
     # --- search_atlas ---
     parts = [
         header(
@@ -138,29 +170,22 @@ def main() -> None:
             "bench_search",
             "search_atlas",
             "Atlas Search only (no MongoDB `$match`). Index: `bench_search_index`. Facet filters are built by `_atlas_filter_clauses_from_filter_test_params` (string lists → `in`; `quantity_min` → `range` on `inventory.quantity`).",
-            env_examples="`BENCH_SEARCH_COLLECTION`, `BENCH_SEARCH_ATLAS_INDEX`, `BENCH_ATLAS_TEXT_QUERY`",
+            env_examples="`BENCH_SEARCH_COLLECTION`, `BENCH_SEARCH_ATLAS_INDEX`",
         ),
         filter_tests_md(),
-        "## Pipelines per CSV label\n",
+        "## Pipelines per `FILTER_TESTS` row (representative `TEST_CASES` shapes)\n",
+        "Each benchmark row uses :meth:`mongo_bench.jobs.benchmarks.benchmark_session.BenchmarkSession.iter_test_cases`; below, **no-text** omits `text` (facet-only `$search`), **with-text** sets `text` to the sample query.\n",
     ]
-    for test_name, params in FILTER_TESTS:
-        only = sa._compound_search_atlas_stage(
-            IDX_SEARCH, SK, TQ, include_text=False, filter_test_params=params
-        )
-        plus = sa._compound_search_atlas_stage(
-            IDX_SEARCH, SK, TQ, include_text=True, filter_test_params=params
-        )
-        parts.append(f"### `atlas_only_{test_name}`\n")
-        parts.append("Facet filters in `compound.filter` only (no `must` text on `product.name`).\n")
+    for test_name, filt in FILTER_TESTS:
+        pipe_no_text = sa._create_pipeline(IDX_SEARCH, SK, filters=filt)
+        pipe_with_text = sa._create_pipeline(IDX_SEARCH, SK, filters=filt, text=TQ)
+        parts.append(f"### `{test_name}` — no `text` in case dict\n")
         parts.append("```json")
-        parts.append(dumps([only]))
+        parts.append(dumps(pipe_no_text))
         parts.append("```\n")
-        parts.append(f"### `atlas_plus_text_{test_name}`\n")
-        parts.append(
-            "Same filters plus `compound.must` with `text` on `product.name` when `BENCH_ATLAS_TEXT_QUERY` is non-blank after strip.\n"
-        )
+        parts.append(f"### `{test_name}` — with `text` = `{TQ}`\n")
         parts.append("```json")
-        parts.append(dumps([plus]))
+        parts.append(dumps(pipe_with_text))
         parts.append("```\n")
 
     (out_dir / "search-atlas.md").write_text("\n".join(parts), encoding="utf-8")
@@ -175,6 +200,7 @@ def main() -> None:
         |------|-----|------------|
         | [search-index.md](search-index.md) | `search_index` | `bench_index` |
         | [search-wildcard.md](search-wildcard.md) | `search_wildcard` | `bench_wildcard` |
+        | [search-attributes.md](search-attributes.md) | `search_attributes` | `bench_attributes` |
         | [search-atlas.md](search-atlas.md) | `search_atlas` | `bench_search` |
 
         **Regenerate** after changing `FILTER_TESTS` or pipeline builders::
@@ -186,7 +212,7 @@ def main() -> None:
         """
     )
     (out_dir / "README.md").write_text(readme, encoding="utf-8")
-    print(f"Wrote {out_dir / 'README.md'}, search-index.md, search-wildcard.md, search-atlas.md")
+    print(f"Wrote {out_dir / 'README.md'}, search-index.md, search-wildcard.md, search-attributes.md, search-atlas.md")
 
 
 if __name__ == "__main__":

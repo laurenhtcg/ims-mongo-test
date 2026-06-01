@@ -104,14 +104,17 @@ Reference that file (or commit hash + path) in test plans and write-ups so other
 
 - **`bench_wildcard`** — wildcard MongoDB index on selected paths; Atlas Search indexes only explicit text-oriented fields.
 - **`bench_index`** — compound MongoDB index; Atlas Search on explicit text fields only.
+- **`bench_attributes`** — attribute-pattern documents with a compound index on ``sellerKey`` + ``attributes`` + ``inventory.quantity``; Atlas Search aligned with ``bench_index`` for text on ``product``.
 - **`bench_search`** — no collection-level indexes; Atlas Search index **`bench_search_dynamic_all`** uses **explicit** field mappings (`dynamic: false`) for the merge_all document shape (see `bench_collections.json`).
 
-The **`search_index`**, **`search_wildcard`**, and **`search_atlas`** benchmarks print timings to stdout and, by default, each writes a **new** CSV per run:
+The **`search_index`**, **`search_wildcard`**, **`search_attributes`**, and **`search_atlas`** benchmarks print timings to stdout and, by default, each writes a **new** CSV per run:
 ``{job}_benchmark_{UTC timestamp}.csv`` in the working directory (e.g. ``search_index_benchmark_…csv``, ``search_wildcard_benchmark_…csv``, ``search_atlas_benchmark_…csv``).
 Set **`BENCH_CSV_DIR`** to put those files in a folder, **`BENCH_CSV_PATH`** for a fixed path, **`BENCH_CSV_UNIQUE=0`**
-for a stable ``{job}_benchmark.csv``, or **`BENCH_CSV=0`** to skip CSV. Use **`BENCH_WILDCARD_COLLECTION`** (default ``bench_wildcard``) for the wildcard job; **`BENCH_INDEX_COLLECTION`** for ``search_index``; **`BENCH_SEARCH_COLLECTION`** and **`BENCH_SEARCH_ATLAS_INDEX`** for ``search_atlas``. For ``search_atlas``, each ``FILTER_TESTS`` case runs twice in Atlas (filters-only then filters + name ``text``), using **`BENCH_ATLAS_TEXT_QUERY`** (default ``Dragon``) for the text arm.
+for a stable ``{job}_benchmark.csv``, or **`BENCH_CSV=0`** to skip CSV. Use **`BENCH_WILDCARD_COLLECTION`** (default ``bench_wildcard``) for the wildcard job; **`BENCH_INDEX_COLLECTION`** for ``search_index``; **`BENCH_ATTRIBUTES_COLLECTION`** for ``search_attributes``; **`BENCH_SEARCH_COLLECTION`** and **`BENCH_SEARCH_ATLAS_INDEX`** for ``search_atlas``. Name search strings come only from the ``text`` field in ``benchmark_fixtures.TEST_CASES`` (merged with each ``FILTER_TESTS`` row per run), not from environment variables.
 
-Example analysis from benchmark CSVs: [`docs/benchmark-run-summary-2026-05-29.md`](docs/benchmark-run-summary-2026-05-29.md).
+**`search_all`** runs those four benchmarks in sequence (same env vars as when run alone); each job still writes its own CSV rows under its ``bench_job`` name.
+
+Example analysis from benchmark CSVs: [`docs/benchmark-run-summary-2026-06-01.md`](docs/benchmark-run-summary-2026-06-01.md) (includes **`bench_attributes`**); earlier matrix: [`docs/benchmark-run-summary-2026-05-29.md`](docs/benchmark-run-summary-2026-05-29.md).
 
 Loader and apply logic: [`src/mongo_bench/bench_schema.py`](src/mongo_bench/bench_schema.py) (`ensure_benchmark_collections`, `bench_collection_names`).
 

@@ -4,7 +4,6 @@ Environment (optional):
 
 - ``BENCH_INDEX_COLLECTION`` — default ``bench_index``
 - ``BENCH_ATLAS_SEARCH_INDEX`` — default ``bench_text`` (must match ``bench_collections.json``)
-- ``BENCH_ATLAS_TEXT_QUERY`` — default ``Dragon``
 - ``BENCH_SELLER_KEYS_PER_TIER`` — how many small / large sellers (and some medium); default ``3``
 - ``BENCH_USE_STATIC_SELLER_KEYS`` — if ``1`` / ``true`` / ``yes``, use :data:`.benchmark_fixtures.STATIC_BENCH_SELLER_KEYS`
   instead of querying :func:`.benchmark_fixtures.seller_keys_by_volume` (reproducible across benchmark jobs).
@@ -14,11 +13,10 @@ Environment (optional):
 - ``BENCH_CSV_UNIQUE`` — if ``0`` / ``false`` / ``no``, use a stable ``{job}_benchmark.csv``; default adds a UTC
   timestamp so each run gets its own file (e.g. ``search_index_benchmark_20260529_153045.csv``).
 
-For each sampled ``sellerKey`` (from volume tiers unless static sellers are enabled), runs a
-baseline Atlas compound ``$search`` (``equals`` on ``sellerKey`` + ``text`` on ``product.name``),
-then for each :data:`.benchmark_fixtures.FILTER_TESTS` entry (including ``seller_only`` with no
-extra dimensions) a timed ``$match`` and the same filter after ``$search``. Each run prints timing
-and result count and appends a row to the CSV when enabled.
+For each sampled ``sellerKey``, runs the Cartesian product of :data:`.benchmark_fixtures.TEST_CASES`
+and :data:`.benchmark_fixtures.FILTER_TESTS`: optional Atlas ``$search`` on ``product.name`` (when the
+case includes ``text``), ``$match`` from ``filters``, then optional ``$sort`` / ``$skip`` / ``$limit``
+from :func:`.benchmark_fixtures.bench_sort_document` and :func:`.benchmark_fixtures.bench_skip_limit_stages`.
 
 Re-apply Atlas search indexes after changing ``bench_collections.json``.
 """
@@ -31,12 +29,12 @@ from typing import Any
 from .benchmark_fixtures import (
     FILTER_TESTS,
     STATIC_BENCH_SELLER_KEYS,
-    bench_csv_enabled,
-    default_benchmark_csv_path,
-    open_benchmark_csv,
-    run_timed_count,
+    TEST_CASES,
+    bench_skip_limit_stages,
+    bench_sort_document,
     seller_keys_by_volume,
 )
+from .benchmark_session import BenchmarkSession
 
 _DEFAULT_COLLECTION = "bench_index"
 _DEFAULT_ATLAS_INDEX = "bench_text"
@@ -109,15 +107,37 @@ def _compound_search_name_stage(atlas_index: str, seller_key: str, text_query: s
     }
 
 
+def _create_pipeline(
+    atlas_index: str,
+    seller_key: str,
+    *,
+    text: Any = None,
+    sort: Any = None,
+    skip: Any = None,
+    limit: Any = None,
+    filters: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """``$search`` (optional) + ``$match`` + optional ``$sort`` / ``$skip`` / ``$limit``.
+
+    Keyword arguments match keys merged by :meth:`~.benchmark_session.BenchmarkSession.iter_test_cases`.
+    """
+    pipeline: list[dict[str, Any]] = []
+    search_text = str(text).strip() if text is not None and str(text).strip() != "" else None
+    if search_text:
+        pipeline.append(_compound_search_name_stage(atlas_index, seller_key, search_text))
+    fp = filters if filters is not None else {}
+    pipeline.append({"$match": _create_filter(seller_key, **fp)})
+    sort_doc = bench_sort_document(sort)
+    if sort_doc:
+        pipeline.append({"$sort": sort_doc})
+    pipeline.extend(bench_skip_limit_stages(skip, limit))
+    return pipeline
+
+
 def search_index() -> None:
     """Run benchmark aggregation variants on ``bench_index`` (see module docstring)."""
-    from mongo_bench.config import load_settings
-    from mongo_bench.db import get_client
-
-    settings = load_settings()
     coll_name = os.environ.get("BENCH_INDEX_COLLECTION", _DEFAULT_COLLECTION)
     atlas_index = os.environ.get("BENCH_ATLAS_SEARCH_INDEX", _DEFAULT_ATLAS_INDEX)
-    text_query = os.environ.get("BENCH_ATLAS_TEXT_QUERY", "Dragon")
     per_tier = int(os.environ.get("BENCH_SELLER_KEYS_PER_TIER", "3"))
     use_static_sellers = os.environ.get("BENCH_USE_STATIC_SELLER_KEYS", "").lower() in (
         "1",
@@ -125,87 +145,36 @@ def search_index() -> None:
         "yes",
     )
 
-    client = get_client()
-    csv_file = None
-    csv_writer = None
-    csv_path: str | None = None
-    try:
-        coll = client[settings.mongodb_db][coll_name]
-
-        sellers = (
-            list(STATIC_BENCH_SELLER_KEYS)
-            if use_static_sellers
-            else seller_keys_by_volume(coll, per_tier=per_tier)
-        )
+    with BenchmarkSession(bench_job=_SEARCH_INDEX_BENCH_JOB, coll_name=coll_name) as b:
+        sellers = b.seller_sample(per_tier=per_tier, use_static=use_static_sellers)
         if not sellers:
-            print(f"mongo-bench: no documents in {settings.mongodb_db!r}.{coll_name!r}; populate first.")
+            print(b.empty_collection_hint())
             return
 
-        if bench_csv_enabled():
-            csv_path = default_benchmark_csv_path(_SEARCH_INDEX_BENCH_JOB)
-            try:
-                csv_file, csv_writer = open_benchmark_csv(csv_path)
-                print(f"mongo-bench: CSV results -> {csv_path!r}")
-            except OSError as exc:
-                print(f"mongo-bench: could not open CSV {csv_path!r}: {exc}")
-                csv_file = None
-                csv_writer = None
-
+        n_matrix = len(TEST_CASES) * len(FILTER_TESTS)
         print(
-            f"bench_index benchmarks  db={settings.mongodb_db!r}  coll={coll_name!r}  "
-            f"atlas_index={atlas_index!r}  text_query={text_query!r}  sellers={len(sellers)}  "
+            f"bench_index benchmarks  db={b.settings.mongodb_db!r}  coll={coll_name!r}  "
+            f"atlas_index={atlas_index!r}  sellers={len(sellers)}  "
             f"seller_source={'static' if use_static_sellers else 'volume'}  "
-            f"filter_tests={len(FILTER_TESTS)}"
+            f"cases={n_matrix}  (TEST_CASES × FILTER_TESTS)"
         )
 
-        for seller_key, tier in sellers:
-            print(f"--- sellerKey={seller_key!r}  tier={tier!r} ---")
-
-            search_stage = _compound_search_name_stage(atlas_index, seller_key, text_query)
-            run_timed_count(
-                coll,
-                [search_stage],
-                f"[{tier}] atlas_compound_sellerKey_name",
-                bench_job=_SEARCH_INDEX_BENCH_JOB,
+        for tier, seller_key, case_label, params in b.iter_test_cases(sellers):
+            pipeline = _create_pipeline(atlas_index, seller_key, **params)
+            b.timed(
+                pipeline,
+                f"[{tier}] {case_label}",
                 seller_key=seller_key,
                 tier=tier,
-                csv_writer=csv_writer,
             )
 
-            for test_name, test_params in FILTER_TESTS:
-                flt = match_from_filter_test(seller_key, test_params)
-                run_timed_count(
-                    coll,
-                    [{"$match": flt}],
-                    f"[{tier}] match_{test_name}",
-                    bench_job=_SEARCH_INDEX_BENCH_JOB,
-                    seller_key=seller_key,
-                    tier=tier,
-                    csv_writer=csv_writer,
-                )
-                run_timed_count(
-                    coll,
-                    [search_stage, {"$match": flt}],
-                    f"[{tier}] atlas_plus_match_{test_name}",
-                    bench_job=_SEARCH_INDEX_BENCH_JOB,
-                    seller_key=seller_key,
-                    tier=tier,
-                    csv_writer=csv_writer,
-                )
-
         print("bench_index benchmarks finished.")
-    finally:
-        if csv_file is not None:
-            try:
-                csv_file.close()
-            except OSError:
-                pass
-        client.close()
 
 
 __all__ = [
     "FILTER_TESTS",
     "STATIC_BENCH_SELLER_KEYS",
+    "TEST_CASES",
     "IGNORE_SLUG",
     "_create_filter",
     "match_from_filter_test",

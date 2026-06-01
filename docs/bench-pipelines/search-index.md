@@ -7,15 +7,16 @@ MongoDB compound index: `bench_compound`. Atlas Search index: `bench_text`. `$ma
 ## Conventions
 
 - **`<SELLER_KEY>`** — replace with the `sellerKey` being benchmarked for that row.
-- **Atlas index name** and **text query** use this job’s Python defaults; override with environment variables documented on `mongo_bench.jobs.benchmarks.search_index` (e.g. `BENCH_INDEX_COLLECTION`, `BENCH_ATLAS_SEARCH_INDEX`, `BENCH_ATLAS_TEXT_QUERY`).
-- **`run_timed_count`** (in `benchmark_fixtures.py`) appends `{"$count": "c"}` to the pipeline for timing and count; that stage is **not** shown below.
+- **Atlas index name** — set via environment variables documented on `mongo_bench.jobs.benchmarks.search_index` (e.g. `BENCH_INDEX_COLLECTION`, `BENCH_ATLAS_SEARCH_INDEX`).
+- **Name search query** — when a pipeline includes Atlas ``text`` on ``product.name``, the string comes from the ``text`` key in each merged benchmark case (`TEST_CASES` × `FILTER_TESTS` in ``benchmark_fixtures.py``), not from an environment variable.
+- **`BenchmarkSession.timed`** (in `benchmark_session.py`) appends `{"$count": "c"}` to the pipeline for timing and count; that stage is **not** shown below.
 
 ---
 
 
 ## `FILTER_TESTS` parameter dicts (from `benchmark_fixtures.py`)
 
-### `seller_only`
+### `no_filters`
 
 ```json
 {}
@@ -61,7 +62,7 @@ MongoDB compound index: `bench_compound`. Atlas Search index: `bench_text`. `$ma
 }
 ```
 
-### `sparse_filters`
+### `line_and_rarity`
 
 ```json
 {
@@ -75,7 +76,7 @@ MongoDB compound index: `bench_compound`. Atlas Search index: `bench_text`. `$ma
 }
 ```
 
-### `multiple_languages`
+### `line_and_languages`
 
 ```json
 {
@@ -113,13 +114,11 @@ MongoDB compound index: `bench_compound`. Atlas Search index: `bench_text`. `$ma
 }
 ```
 
-### `rare_product_lines`
+### `rare_product_line`
 
 ```json
 {
   "product_line": [
-    "Union Arena",
-    "Argent Saga TCG",
     "Warhammer Age of Sigmar Champions TCG"
   ]
 }
@@ -159,7 +158,7 @@ Single-stage Atlas text + `sellerKey` (no facet `$match`).
 ]
 ```
 
-### `match_seller_only`
+### `match_no_filters`
 
 ```json
 [
@@ -171,7 +170,7 @@ Single-stage Atlas text + `sellerKey` (no facet `$match`).
 ]
 ```
 
-### `atlas_plus_match_seller_only`
+### `atlas_plus_match_no_filters`
 
 ```json
 [
@@ -408,7 +407,7 @@ Single-stage Atlas text + `sellerKey` (no facet `$match`).
 ]
 ```
 
-### `match_sparse_filters`
+### `match_line_and_rarity`
 
 ```json
 [
@@ -443,7 +442,7 @@ Single-stage Atlas text + `sellerKey` (no facet `$match`).
 ]
 ```
 
-### `atlas_plus_match_sparse_filters`
+### `atlas_plus_match_line_and_rarity`
 
 ```json
 [
@@ -501,7 +500,7 @@ Single-stage Atlas text + `sellerKey` (no facet `$match`).
 ]
 ```
 
-### `match_multiple_languages`
+### `match_line_and_languages`
 
 ```json
 [
@@ -538,7 +537,7 @@ Single-stage Atlas text + `sellerKey` (no facet `$match`).
 ]
 ```
 
-### `atlas_plus_match_multiple_languages`
+### `atlas_plus_match_line_and_languages`
 
 ```json
 [
@@ -778,7 +777,7 @@ Single-stage Atlas text + `sellerKey` (no facet `$match`).
 ]
 ```
 
-### `match_rare_product_lines`
+### `match_rare_product_line`
 
 ```json
 [
@@ -787,8 +786,6 @@ Single-stage Atlas text + `sellerKey` (no facet `$match`).
       "sellerKey": "<SELLER_KEY>",
       "product.productLine": {
         "$in": [
-          "Union Arena",
-          "Argent Saga TCG",
           "Warhammer Age of Sigmar Champions TCG"
         ]
       },
@@ -812,7 +809,7 @@ Single-stage Atlas text + `sellerKey` (no facet `$match`).
 ]
 ```
 
-### `atlas_plus_match_rare_product_lines`
+### `atlas_plus_match_rare_product_line`
 
 ```json
 [
@@ -844,8 +841,6 @@ Single-stage Atlas text + `sellerKey` (no facet `$match`).
       "sellerKey": "<SELLER_KEY>",
       "product.productLine": {
         "$in": [
-          "Union Arena",
-          "Argent Saga TCG",
           "Warhammer Age of Sigmar Champions TCG"
         ]
       },

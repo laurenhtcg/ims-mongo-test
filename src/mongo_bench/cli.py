@@ -142,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     p_init.set_defaults(func=_cmd_init)
 
     p_pop = sub.add_parser("populate", help="Run a named populate job.")
-    p_pop.add_argument("name", help="Job name, e.g. seed_users")
+    p_pop.add_argument("name", help="Job name, e.g. merge_all")
     p_pop.add_argument(
         "--skip-schema",
         action="store_true",

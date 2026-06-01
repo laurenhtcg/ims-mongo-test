@@ -1,25 +1,36 @@
 """Shared benchmark inputs used across jobs in this package.
 
-Holds cross-benchmark data such as :data:`FILTER_TESTS`, :data:`STATIC_BENCH_SELLER_KEYS`,
-:func:`seller_keys_by_volume`, and :func:`run_timed_count` for timed aggregation + CSV logging (per
-benchmark job name and per-run timestamps by default). Filter construction for ``bench_index`` /
-``search_index`` lives in :mod:`search_index`; sparse filters for ``search_wildcard`` in
-:mod:`search_wildcard`; Atlas-only clauses for ``search_atlas`` in :mod:`search_atlas`.
+Holds cross-benchmark data such as :data:`FILTER_TESTS`, :data:`STATIC_BENCH_SELLER_KEYS`, and
+:func:`seller_keys_by_volume`. Timed aggregation + CSV rows are implemented by
+:meth:`~.benchmark_session.BenchmarkSession.timed`. Use :class:`~.benchmark_session.BenchmarkSession`
+for client/CSV/teardown around each job. Filter construction for ``bench_index`` / ``search_index`` lives
+in :mod:`search_index`; sparse filters for ``search_wildcard`` in :mod:`search_wildcard`;
+attribute-pattern ``$elemMatch`` filters for ``search_attributes`` in :mod:`search_attributes`; Atlas-only
+clauses for ``search_atlas`` in :mod:`search_atlas`.
 """
 
 from __future__ import annotations
 
 import csv
 import os
-import time
 from datetime import datetime, timezone
 from typing import Any, TextIO
 
+TEST_CASES = [
+    ("filters_only", {}),
+    ("filters_and_deep_pagination", {"sort": "name", "skip": 1000, "limit": 100}),
+    ("search", {"text": "Dragon"}),
+    ("search_and_sort_quantity", {"text": "Dragon", "sort": "quantity"}),
+    ("search_and_pagination", {"text": "Dragon", "sort": "name", "skip": 10, "limit": 10}),
+    ("search_and_deep_pagination", {"text": "Dragon", "sort": "name", "skip": 1000, "limit": 100}),
+]
+
 # Each entry is ``("test name", filter param dict)`` for ``search_index`` / ``search_wildcard`` /
-# ``search_atlas`` (Atlas-only uses the same param dicts as ``in`` / ``range`` inside ``$search``).
+# ``search_attributes`` / ``search_atlas`` (Atlas-only uses the same param dicts as ``in`` / ``range``
+# inside ``$search``).
 FILTER_TESTS: list[tuple[str, dict[str, Any]]] = [
     (
-        "seller_only",
+        "no_filters",
         {},
     ),
     (
@@ -44,14 +55,14 @@ FILTER_TESTS: list[tuple[str, dict[str, Any]]] = [
         },
     ),
     (
-        "sparse_filters",
+        "line_and_rarity",
         {
             "product_line": ["Magic The Gathering TCG"],
             "rarity": ["Common", "Rare"],
         },
     ),
     (
-        "multiple_languages",
+        "line_and_languages",
         {
             "product_line": ["Magic The Gathering TCG"],
             "language": ["English", "Japanese"],
@@ -72,9 +83,9 @@ FILTER_TESTS: list[tuple[str, dict[str, Any]]] = [
         },
     ),
     (
-        "rare_product_lines",
+        "rare_product_line",
         {
-            "product_line": ["Union Arena", "Argent Saga TCG", "Warhammer Age of Sigmar Champions TCG"]
+            "product_line": ["Warhammer Age of Sigmar Champions TCG"]
         },
     ),
 ]
@@ -150,56 +161,49 @@ def open_benchmark_csv(path: str) -> tuple[TextIO, csv.DictWriter]:
     return f, w
 
 
-def run_timed_count(
-    coll: Any,
-    pipeline: list[dict[str, Any]],
-    label: str,
-    *,
-    bench_job: str = "",
-    seller_key: str = "",
-    tier: str = "",
-    csv_writer: csv.DictWriter | None = None,
-) -> float:
-    """Run ``pipeline`` + ``$count``; print ms and count; optionally append one CSV row."""
-    full = [*pipeline, {"$count": "c"}]
-    t0 = time.perf_counter()
+def _bench_nonneg_int(value: Any) -> int:
+    """Coerce ``value`` to a non-negative int; booleans and invalid values become ``0``."""
+    if value is None or isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return max(0, value)
+    if isinstance(value, float) and value == int(value):
+        return max(0, int(value))
     try:
-        rows = list(coll.aggregate(full, allowDiskUse=True))
-    except Exception as exc:  # noqa: BLE001
-        elapsed_ms = (time.perf_counter() - t0) * 1000.0
-        print(f"{label}: FAILED: {exc}")
-        if csv_writer is not None:
-            csv_writer.writerow(
-                {
-                    "bench_job": bench_job,
-                    "collection": coll.name,
-                    "tier": tier,
-                    "seller_key": seller_key,
-                    "label": label,
-                    "elapsed_ms": f"{elapsed_ms:.4f}",
-                    "count": "-1",
-                    "error": str(exc),
-                }
-            )
-        return -1.0
-    elapsed = time.perf_counter() - t0
-    elapsed_ms = elapsed * 1000.0
-    n = int(rows[0]["c"]) if rows else 0
-    print(f"{label}: {elapsed_ms:.2f} ms  count={n}")
-    if csv_writer is not None:
-        csv_writer.writerow(
-            {
-                "bench_job": bench_job,
-                "collection": coll.name,
-                "tier": tier,
-                "seller_key": seller_key,
-                "label": label,
-                "elapsed_ms": f"{elapsed_ms:.4f}",
-                "count": str(n),
-                "error": "",
-            }
-        )
-    return elapsed
+        return max(0, int(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+
+
+def bench_sort_document(sort: Any) -> dict[str, int] | None:
+    """Document for aggregation ``$sort`` or Atlas ``$search`` ``sort`` (ascending).
+
+    ``TEST_CASES`` use ``sort`` values ``name`` → ``product.name``, ``quantity`` →
+    ``inventory.quantity``.
+    """
+    if not isinstance(sort, str):
+        return None
+    key = sort.strip().lower()
+    if key == "name":
+        return {"product.name": 1}
+    if key == "quantity":
+        return {"inventory.quantity": 1}
+    return None
+
+
+def bench_skip_limit_stages(skip: Any, limit: Any) -> list[dict[str, Any]]:
+    """Build ``$skip`` / ``$limit`` stages from ``TEST_CASES`` ``skip`` / ``limit`` keys.
+
+    Stages are omitted when the coerced value is ``0``. ``$skip`` precedes ``$limit`` when both are set.
+    """
+    out: list[dict[str, Any]] = []
+    sk = _bench_nonneg_int(skip)
+    if sk > 0:
+        out.append({"$skip": sk})
+    lm = _bench_nonneg_int(limit)
+    if lm > 0:
+        out.append({"$limit": lm})
+    return out
 
 
 def seller_keys_by_volume(coll: Any, *, per_tier: int) -> list[tuple[str, str]]:
@@ -235,10 +239,12 @@ __all__ = [
     "BENCHMARK_CSV_COLUMNS",
     "FILTER_TESTS",
     "STATIC_BENCH_SELLER_KEYS",
+    "TEST_CASES",
+    "bench_skip_limit_stages",
+    "bench_sort_document",
     "bench_csv_enabled",
     "bench_csv_unique_enabled",
     "default_benchmark_csv_path",
     "open_benchmark_csv",
-    "run_timed_count",
     "seller_keys_by_volume",
 ]

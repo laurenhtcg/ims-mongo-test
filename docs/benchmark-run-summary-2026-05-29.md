@@ -10,7 +10,7 @@ This note documents the benchmark **collections and indexes** (`bench_collection
 | `search_wildcard` | `search_wildcard_benchmark_20260529_182845.csv` | `search_wildcard_benchmark_20260529_182907.csv` |
 | `search_atlas` | `search_atlas_benchmark_20260529_182716.csv` | `search_atlas_benchmark_20260529_182747.csv` |
 
-All jobs used **`FILTER_TESTS`** and **`STATIC_BENCH_SELLER_KEYS`** from `benchmark_fixtures.py` (nine sellers: three small, three large, three medium). Default Atlas text query: **`Dragon`** (`BENCH_ATLAS_TEXT_QUERY`).
+All jobs used **`FILTER_TESTS`** and **`STATIC_BENCH_SELLER_KEYS`** from `benchmark_fixtures.py` (nine sellers: three small, three large, three medium). Name search used the **`Dragon`** string from **`TEST_CASES`** rows that include a `text` field (not an environment variable).
 
 **Pipeline JSON (per test case):** [docs/bench-pipelines/README.md](bench-pipelines/README.md) — generated reference for each job’s aggregation stages; regenerate with `PYTHONPATH=src python3 docs/bench-pipelines/generate_pipeline_docs.py`.
 
@@ -133,7 +133,7 @@ So **`bench_wildcard`** carries the **largest MongoDB index footprint** in this 
 
 ### 1.4 Text search + structured filters: how the three benchmarks differ
 
-All three jobs combine the default **`Dragon`** text query on **`product.name`** with the same **`FILTER_TESTS`** facet params, but **where** text and facets run—and **what CSV labels** mean—differs. That is the main architectural split for “search UI: keyword + facets.”
+All three jobs use the same **`Dragon`** keyword on **`product.name`** wherever **`TEST_CASES`** includes a **`text`** field, combined with the same **`FILTER_TESTS`** facet params, but **where** text and facets run—and **what CSV labels** mean—differs. That is the main architectural split for “search UI: keyword + facets.”
 
 | Benchmark | Collection | CSV label for “text + facets” | Pipeline shape | Role of Mongo vs Atlas |
 |-----------|------------|------------------------------|----------------|-------------------------|
@@ -184,7 +184,7 @@ Each scenario is a `(test_name, params)` pair. **`search_index`** builds full fa
 ### 3.1 How the job uses indexes
 
 - **MongoDB**: timed **`$match`** pipelines use **`bench_compound`** via `_create_filter`: leading `sellerKey`, then `$in` (or **`$ne: "XXXXXX"`** sentinel) on each projected facet so the planner can use the compound index shape consistently.
-- **Atlas**: baseline **`atlas_compound_sellerKey_name`** — single `$search` on **`bench_text`**: `compound.filter` = `equals` on `sellerKey`; `compound.must` = **`text`** on **`product.name`** with `BENCH_ATLAS_TEXT_QUERY` (default `Dragon`).
+- **Atlas**: baseline **`atlas_compound_sellerKey_name`** — single `$search` on **`bench_text`**: `compound.filter` = `equals` on `sellerKey`; `compound.must` = **`text`** on **`product.name`** using the query string from the benchmark case (`TEST_CASES` / merged params).
 - **Combined**: for each filter test, **`atlas_plus_match_{test}`** runs the same `$search` stage followed by **`$match`** with the same predicate as **`match_{test}`** (Atlas text + `sellerKey` first, then compound-backed facet match). See **§1.4** for how this differs from **`atlas_plus_text_*`** on **`bench_search`** and for median timings.
 
 ### 3.2 Correctness across backends
@@ -236,7 +236,7 @@ For **`atlas_plus_match_*`**, **`bench_index`** and **`bench_wildcard`** medians
 - **MongoDB**: none for this collection (per spec).
 - **Atlas**: single **`$search`** on **`bench_search_index`**. For each `FILTER_TESTS` entry, two pipelines:
   - **`atlas_only_{test}`**: `compound.filter` only — `equals` on **`sellerKey`** plus **`in`** / **`range`** clauses derived from the same params as Mongo (`product.productLine`, `product.set`, `product.language`, `product.printing`, `product.rarity`, `product.type`, `inventory.quantity`).
-  - **`atlas_plus_text_{test}`**: same filters, plus **`compound.must`** with **`text`** on **`product.name`** when the query string is non-blank (default **`Dragon`**). This is the **single-stage** analogue of **`search_index`**’s **`atlas_plus_match_{test}`**; compare timings in **§1.4**.
+  - **`atlas_plus_text_{test}`**: same filters, plus **`compound.must`** with **`text`** on **`product.name`** when the merged case supplies a non-blank query string (e.g. **`Dragon`** from **`TEST_CASES`**). This is the **single-stage** analogue of **`search_index`**’s **`atlas_plus_match_{test}`**; compare timings in **§1.4**.
 
 Explicit **`lucene.keyword`** (with `token`) on **`productLine`** and **`set`** in **`bench_search_index`** keeps facet **`in`** filters aligned with stored string values — this run shows **non-zero** `atlas_only_*` counts wherever the corresponding **`match_*`** counts are non-zero.
 
@@ -253,7 +253,7 @@ Explicit **`lucene.keyword`** (with `token`) on **`productLine`** and **`set`** 
 1. **Counts**: **`match_*`** agrees between **`bench_index`** and **`bench_wildcard`**; **`atlas_only_*`** on **`bench_search`** agrees with **`match_*`** on **`bench_index`**. Two runs per job produced **no count drift**.
 2. **Structured facets at large cardinality**: **`bench_compound` + `$match`** keeps selective AND filters in the **≈ 50–80 ms** (median) range on large sellers; **`bench_wildcard_sellerKey_paths`** can be **several× slower** on the same tight predicates.
 3. **Atlas-only on full seller**: **`atlas_only_seller_only`** is a poor stand-in for “Mongo `sellerKey` partition scan” cost — prefer **`equals` + additional filters** or a **text / must** clause to bound work, as in **`atlas_plus_text_*`**.
-4. **Operational**: default text **`Dragon`** behaves **tier-dependent** on the name field (often **0** on small static sellers for pure-text stages, non-zero on large). For product decisions, also benchmark a term sampled from real **`product.name`** data.
+4. **Operational**: the bundled matrix uses **`Dragon`** in **`TEST_CASES`** where a name search applies; behavior is **tier-dependent** on the name field (often **0** on small static sellers for pure-text stages, non-zero on large). For product decisions, also benchmark a term sampled from real **`product.name`** data.
 5. **Text + facets (§1.4)**: **`bench_index`** **`atlas_plus_match_*`** trades a **second** pipeline stage for **compound-index** facet enforcement and a smaller **Mongo** index than **`bench_wildcard`** (**§1.3**). **`bench_search`** **`atlas_plus_text_*`** is often **faster** when facets narrow inside one **`$search`**, but requires **full** facet coverage in the Atlas mapping.
 
 ---

@@ -1,14 +1,17 @@
-"""Benchmark ``bench_wildcard`` with compound wildcard index ``bench_wildcard_sellerKey_paths`` and Atlas index ``bench_text``.
+"""Benchmark ``bench_attributes`` with compound index ``bench_attributes_compound`` and Atlas index ``bench_text``.
 
-Mirrors :mod:`search_index` pipeline shapes; ``$match`` filters only include fields present in each
-:data:`~.benchmark_fixtures.FILTER_TESTS` case (no ``$ne`` sentinels) so the wildcard index can serve
-dynamic predicates. Case iteration uses :meth:`~.benchmark_session.BenchmarkSession.iter_test_cases`
-(:data:`~.benchmark_fixtures.TEST_CASES` × :data:`~.benchmark_fixtures.FILTER_TESTS`). Optional
-``$sort`` / ``$skip`` / ``$limit`` match :mod:`search_index`.
+Documents use the attribute pattern: ``attributes`` is an array of ``{ "key", "value" }`` pairs (see
+:func:`mongo_bench.jobs.populate.merge_all._add_attributes`). ``$match`` uses ``$elemMatch`` on
+``attributes`` so predicates align with the compound index on ``sellerKey``, ``attributes.key``,
+``attributes.value``, and ``inventory.quantity``.
+
+Mirrors :mod:`search_wildcard` pipeline shape (optional ``$search`` + sparse ``$match`` + sort/skip/limit).
+Case iteration uses :meth:`~.benchmark_session.BenchmarkSession.iter_test_cases`
+(:data:`~.benchmark_fixtures.TEST_CASES` × :data:`~.benchmark_fixtures.FILTER_TESTS`).
 
 Environment (optional):
 
-- ``BENCH_WILDCARD_COLLECTION`` — default ``bench_wildcard``
+- ``BENCH_ATTRIBUTES_COLLECTION`` — default ``bench_attributes``
 - ``BENCH_ATLAS_SEARCH_INDEX`` — default ``bench_text`` (must match ``bench_collections.json`` for this collection)
 - ``BENCH_SELLER_KEYS_PER_TIER`` — default ``3``
 - ``BENCH_USE_STATIC_SELLER_KEYS`` — same as :mod:`search_index`
@@ -32,12 +35,12 @@ from .benchmark_fixtures import (
 )
 from .benchmark_session import BenchmarkSession
 
-_DEFAULT_COLLECTION = "bench_wildcard"
+_DEFAULT_COLLECTION = "bench_attributes"
 _DEFAULT_ATLAS_INDEX = "bench_text"
-_SEARCH_WILDCARD_BENCH_JOB = "search_wildcard"
+_SEARCH_ATTRIBUTES_BENCH_JOB = "search_attributes"
 
 
-def _create_wildcard_filter(
+def _create_attributes_filter(
     seller_key: str,
     *,
     product_line: list[str] | None = None,
@@ -48,33 +51,37 @@ def _create_wildcard_filter(
     product_types: list[str] | None = None,
     quantity_min: int = 0,
 ) -> dict[str, Any]:
-    """Build a sparse ``$match``: ``sellerKey`` plus only dimensions that are set (truthy lists or ``quantity_min``).
+    """Build a sparse ``$match``: ``sellerKey`` plus ``$elemMatch`` only for dimensions that are set.
 
-    Intended for ``_create_wildcard_filter(seller_key, **params)`` with :data:`~.benchmark_fixtures.FILTER_TESTS`.
+    Maps :data:`~.benchmark_fixtures.FILTER_TESTS` keys to ``attributes.key`` values used at populate
+    time: ``product_line`` → ``productLine``, ``product_sets`` → ``set``, ``product_types`` → ``type``.
     """
-    flt: dict[str, Any] = {"sellerKey": seller_key}
+    conds: list[dict[str, Any]] = [{"sellerKey": seller_key}]
 
-    if product_line:
-        flt["product.productLine"] = {"$in": product_line}
-    if product_sets:
-        flt["product.set"] = {"$in": product_sets}
-    if language:
-        flt["product.language"] = {"$in": language}
-    if printing:
-        flt["product.printing"] = {"$in": printing}
-    if rarity:
-        flt["product.rarity"] = {"$in": rarity}
-    if product_types:
-        flt["product.type"] = {"$in": product_types}
+    def add_pair(attr_key: str, values: list[str] | None) -> None:
+        if values:
+            conds.append(
+                {"attributes": {"$elemMatch": {"key": attr_key, "value": {"$in": values}}}}
+            )
+
+    add_pair("productLine", product_line)
+    add_pair("set", product_sets)
+    add_pair("language", language)
+    add_pair("printing", printing)
+    add_pair("rarity", rarity)
+    add_pair("type", product_types)
+
     if quantity_min:
-        flt["inventory.quantity"] = {"$gte": quantity_min}
+        conds.append({"inventory.quantity": {"$gte": quantity_min}})
 
-    return flt
+    if len(conds) == 1:
+        return conds[0]
+    return {"$and": conds}
 
 
 def match_from_filter_test(seller_key: str, params: dict[str, Any]) -> dict[str, Any]:
-    """Full ``$match`` document for wildcard benchmarks: ``sellerKey`` plus only params from the test dict."""
-    return _create_wildcard_filter(seller_key, **params)
+    """Full ``$match`` for attribute-pattern benchmarks: ``sellerKey`` plus ``$elemMatch`` from the test dict."""
+    return _create_attributes_filter(seller_key, **params)
 
 
 def _compound_search_name_stage(atlas_index: str, seller_key: str, text_query: str) -> dict[str, Any]:
@@ -117,9 +124,9 @@ def _create_pipeline(
     return pipeline
 
 
-def search_wildcard() -> None:
-    """Run benchmark aggregation variants on ``bench_wildcard`` (see module docstring)."""
-    coll_name = os.environ.get("BENCH_WILDCARD_COLLECTION", _DEFAULT_COLLECTION)
+def search_attributes() -> None:
+    """Run benchmark aggregation variants on ``bench_attributes`` (see module docstring)."""
+    coll_name = os.environ.get("BENCH_ATTRIBUTES_COLLECTION", _DEFAULT_COLLECTION)
     atlas_index = os.environ.get("BENCH_ATLAS_SEARCH_INDEX", _DEFAULT_ATLAS_INDEX)
     per_tier = int(os.environ.get("BENCH_SELLER_KEYS_PER_TIER", "3"))
     use_static_sellers = os.environ.get("BENCH_USE_STATIC_SELLER_KEYS", "").lower() in (
@@ -128,7 +135,7 @@ def search_wildcard() -> None:
         "yes",
     )
 
-    with BenchmarkSession(bench_job=_SEARCH_WILDCARD_BENCH_JOB, coll_name=coll_name) as b:
+    with BenchmarkSession(bench_job=_SEARCH_ATTRIBUTES_BENCH_JOB, coll_name=coll_name) as b:
         sellers = b.seller_sample(per_tier=per_tier, use_static=use_static_sellers)
         if not sellers:
             print(b.empty_collection_hint())
@@ -136,7 +143,7 @@ def search_wildcard() -> None:
 
         n_matrix = len(TEST_CASES) * len(FILTER_TESTS)
         print(
-            f"bench_wildcard benchmarks  db={b.settings.mongodb_db!r}  coll={coll_name!r}  "
+            f"bench_attributes benchmarks  db={b.settings.mongodb_db!r}  coll={coll_name!r}  "
             f"atlas_index={atlas_index!r}  sellers={len(sellers)}  "
             f"seller_source={'static' if use_static_sellers else 'volume'}  "
             f"cases={n_matrix}  (TEST_CASES × FILTER_TESTS)"
@@ -151,15 +158,15 @@ def search_wildcard() -> None:
                 tier=tier,
             )
 
-        print("bench_wildcard benchmarks finished.")
+        print("bench_attributes benchmarks finished.")
 
 
 __all__ = [
     "FILTER_TESTS",
     "STATIC_BENCH_SELLER_KEYS",
     "TEST_CASES",
-    "_create_wildcard_filter",
+    "_create_attributes_filter",
     "match_from_filter_test",
-    "search_wildcard",
+    "search_attributes",
     "seller_keys_by_volume",
 ]
