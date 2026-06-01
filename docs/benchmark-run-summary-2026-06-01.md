@@ -4,14 +4,14 @@ This note documents the benchmark **collections and indexes** (`bench_collection
 
 ## CSV inputs (single run each)
 
-| Benchmark job | CSV file (repo root) |
-|----------------|----------------------|
-| `search_index` | `search_index_benchmark_20260601_152610.csv` |
-| `search_wildcard` | `search_wildcard_benchmark_20260601_152755.csv` |
-| `search_attributes` | `search_attributes_benchmark_20260601_152718.csv` |
-| `search_atlas` | `search_atlas_benchmark_20260601_152639.csv` |
+| Benchmark job | CSV file |
+|----------------|----------|
+| `search_index` | [`docs/runs/20260601/search_index_benchmark_20260601_152610.csv`](runs/20260601/search_index_benchmark_20260601_152610.csv) |
+| `search_wildcard` | [`docs/runs/20260601/search_wildcard_benchmark_20260601_152755.csv`](runs/20260601/search_wildcard_benchmark_20260601_152755.csv) |
+| `search_attributes` | [`docs/runs/20260601/search_attributes_benchmark_20260601_152718.csv`](runs/20260601/search_attributes_benchmark_20260601_152718.csv) |
+| `search_atlas` | [`docs/runs/20260601/search_atlas_benchmark_20260601_152639.csv`](runs/20260601/search_atlas_benchmark_20260601_152639.csv) |
 
-All jobs used **`FILTER_TESTS`**, **`TEST_CASES`**, and **`STATIC_BENCH_SELLER_KEYS`** from `benchmark_fixtures.py` at the time of the run (nine sellers: three small, three large, three medium). The **`TEST_CASES`** matrix in code is slimmer than the May 2026 write-up (six case families × eight filter rows = **48** timed pipelines per seller, **432** CSV rows per job). Name search used the **`Dragon`** string from cases that include a `text` field.
+All jobs used **`FILTER_TESTS`**, **`TEST_CASES`**, and **`STATIC_BENCH_SELLER_KEYS`** from `benchmark_fixtures.py` at the time of the run (nine sellers: three small, three large, three medium). The matrix is **six** `TEST_CASES` families × **eight** `FILTER_TESTS` rows = **48** timed pipelines per seller (**432** CSV rows per job). Besides **`filters_only`** and **`search`**, the case families exercise **`$sort`**, **`$skip`**, and **`$limit`** (see **§3.3**). Name search uses **`Dragon`** wherever a case supplies a `text` field.
 
 **Pipeline JSON (per test case):** [docs/bench-pipelines/README.md](bench-pipelines/README.md) — regenerate with `PYTHONPATH=src python3 docs/bench-pipelines/generate_pipeline_docs.py`.
 
@@ -127,11 +127,43 @@ Unless noted, numbers are **median `elapsed_ms` across the three static large se
 - **`search_attributes`** is **similar** for most facet rows but shows a **much slower** **`search_no_filters`** (**≈ 484 ms** vs **≈ 88 ms** on `search_index` on this run): same Atlas prefix, but the following **`$match`** is only `{ sellerKey }` (no `$elemMatch` facets), which may interact differently with the **multikey attribute** path than nested `product.*` on compound or wildcard. Worth profiling if `search_no_filters` on **`bench_attributes`** is a hot path.
 - **`search_atlas`** **`search_*`** rows are often **faster than hybrid Mongo jobs** when facets are present (**≈ 52–58 ms** medians here): single **`$search`** resolves text + facets in Atlas (`bench_search_index`).
 
-### 3.3 `search_atlas` facet-only (cross-reference)
+### 3.3 Sort, skip, limit, and what **`$count`** measures
 
-Facet-only Atlas timings for every **`filters_only_*`** row are in **§3.1** (same CSV run, **no** `text` / `must` clause). Hybrid **`search_*`** rows with **`Dragon`** remain in **§3.2**.
+The extra case families in **`TEST_CASES`** (`benchmark_fixtures.py`) append stages after the same **`$search`** / **`$match`** core as **`search`** or **`filters_only`**:
 
-### 3.4 Small seller sanity check
+| Case name | Adds (after match / search) |
+|-----------|-----------------------------|
+| **`filters_and_deep_pagination`** | **`$sort`** on **`product.name`**, **`$skip` 1000**, **`$limit` 100** |
+| **`search_and_sort_quantity`** | **`$sort`** on **`inventory.quantity`** |
+| **`search_and_pagination`** | **`$sort`** on **`product.name`**, **`$skip` 10**, **`$limit` 10** |
+| **`search_and_deep_pagination`** | **`$sort`** on **`product.name`**, **`$skip` 1000**, **`$limit` 100** |
+
+**`BenchmarkSession.timed`** appends **`$count`** to the **full** pipeline, so the CSV **`count`** is the number of documents **emerging from the last stage** (after skip/limit). A **`$limit` 10** row therefore shows **`count = 10`** when at least ten documents survive; **`$skip` 1000** with fewer than 1000 matches yields **`count = 0`** even if latency stays in the same ballpark as the baseline **`search_*`** row.
+
+**Effects in this run (large-tier medians from the CSVs)**
+
+1. **Mongo-only deep page (`filters_and_deep_pagination_*` vs `filters_only_*`)**  
+   - **`search_index`**: For **`no_filters`**, latency moves **≈ 71 ms → ≈ 87 ms** while **`count`** drops **43,240 → 100** (the page window). For **`product_line_only`**, **≈ 100 ms → ≈ 118 ms**, **`count` 21,891 → 100**.  
+   - **`search_wildcard` / `search_attributes`**: On **`no_filters`**, adding sort/skip/limit **reduces** median latency (wildcard **≈ 1.2 s → ≈ 0.38 s**; attributes **≈ 1.25 s → ≈ 0.29 s**) while still returning **100** documents — the server does less work once the pipeline is bounded by the **limit** after the expensive partition scan.  
+   - **`search_atlas`**: **`filters_and_deep_pagination_no_filters`** falls **≈ 1.7 s → ≈ 0.14 s** median with **`count` 100** — Atlas **`$search`** supports in-query **`sort` / `skip` / `limit`**, so deep paging can avoid materializing the whole seller facet-only result in one shot.
+
+2. **Sort by quantity after text (`search_and_sort_quantity_*` vs `search_*`)**  
+   On **`search_index`**, median ms and **`count`** stay **aligned** with **`search_*`** for the same filter (e.g. **`no_filters`**: **≈ 88 ms**, **789** hits) — an extra **`$sort`** on **`inventory.quantity`** on an already-small set is cheap here.
+
+3. **Shallow pagination (`search_and_pagination_*`)**  
+   **`count`** becomes **10** whenever enough documents pass the text + facet filter; median latency stays **within a few ms** of **`search_*`** on **`search_index`** / **`search_atlas`** (e.g. **`product_line_only`**: **≈ 87 ms** vs **≈ 87–89 ms** baseline, **`count` 10** vs **163**).
+
+4. **Deep pagination on text (`search_and_deep_pagination_*`)**  
+   For **`product_line_only`**, **`Dragon`** yields a **median `count` of 163** on large sellers for **`search_*`** — **below** **`skip` 1000**, so **`search_and_deep_pagination_product_line_only`** returns **`count = 0`** for **all four jobs** while latency remains **≈ 88–90 ms** (hybrid) or **≈ 63 ms** (Atlas): you still pay for **`$search`** + match + sort, but the page is **empty**. For **`no_filters`**, **`search_*`** has **789** hits **\< 1000**, so **`search_and_deep_pagination_no_filters`** also reports **`count = 0`** on this corpus.
+
+5. **`search_attributes` + `search_no_filters`**  
+   Baseline **`search_no_filters`** is slow (**≈ 484 ms** median, §3.2). Adding **`$skip`/`$limit`** in **`search_and_pagination_*`** / **`search_and_deep_pagination_*`** drops median latency to **≈ 85–86 ms** with **`count` 10** or **0** — most time was tied to materializing a large intermediate set; **pagination stages bound** what **`$count`** observes.
+
+### 3.4 `search_atlas` facet-only (cross-reference)
+
+Facet-only Atlas timings for every **`filters_only_*`** row are in **§3.1** (same CSV run, **no** `text` / `must` clause). Hybrid **`search_*`** rows with **`Dragon`** remain in **§3.2**; sort/skip/limit behavior for Atlas is covered in **§3.3**.
+
+### 3.5 Small seller sanity check
 
 For seller **`3617b942`** (small tier), **`filters_only_no_filters`** returns **count = 1** with **≈ 49–61 ms** across all four jobs — consistent with a tiny partition and correct **`sellerKey`** wiring after the tuple-order fix.
 
@@ -142,7 +174,8 @@ For seller **`3617b942`** (small tier), **`filters_only_no_filters`** returns **
 1. **Counts**: **`filters_only_*`** medians match across **`bench_index`**, **`bench_wildcard`**, and **`bench_attributes`** on large sellers; **`search_atlas`** matches the same semantics.
 2. **Structured facets at large cardinality (§3.1)**: **`bench_compound`** keeps many **`filters_only_*`** workloads in a **≈ 50–120 ms** median band; **wildcard** and **attribute** indexes trade off depending on predicate shape. **`search_atlas`** facet-only is **fastest** on tight **`multiple_filters_*`** / **`rare_product_line`** here, but **slowest** on **`no_filters`**, **`product_line_only`**, and several **broad** facet slices — compare the full five-way table in **§3.1**.
 3. **Text + facets**: Hybrid **`bench_text`** + Mongo tail is **≈ 85–90 ms** median for most **`search_*`** rows on **`bench_index`** / **`bench_wildcard`** / **`bench_attributes`** (except the **`search_no_filters`** outlier on **`bench_attributes`** — see §3.2).
-4. **Operational**: **`iter_test_cases`** must iterate **`(seller_key, tier)`** tuples from **`STATIC_BENCH_SELLER_KEYS`** / **`seller_keys_by_volume`**; swapping them silently queried **`sellerKey: "small"`** etc. before the 2026-06-01 fix.
+4. **Sort / skip / limit (§3.3)**: **`$count`** reflects documents **after** pagination; **`search_and_deep_pagination_*`** can show **`count = 0`** when **`skip`** exceeds the **`Dragon`** hit count. **`search_atlas`** can fold sort/skip/limit into **`$search`**, changing facet-only deep-page cost vs Mongo follow-on stages.
+5. **Operational**: **`iter_test_cases`** must iterate **`(seller_key, tier)`** tuples from **`STATIC_BENCH_SELLER_KEYS`** / **`seller_keys_by_volume`**; swapping them silently queried **`sellerKey: "small"`** etc. before the 2026-06-01 fix.
 
 ---
 
@@ -159,4 +192,4 @@ For seller **`3617b942`** (small tier), **`filters_only_no_filters`** returns **
 
 ---
 
-*Numbers cited from the four CSV files in the repository root; medians use the three static **large** sellers unless noted. Earlier write-up for a two-run matrix and older `FILTER_TESTS` names: [benchmark-run-summary-2026-05-29.md](benchmark-run-summary-2026-05-29.md).*
+*Numbers cited from the CSV files under [`docs/runs/20260601/`](runs/20260601/); medians use the three static **large** sellers unless noted. Earlier write-up for a two-run matrix and older `FILTER_TESTS` names: [benchmark-run-summary-2026-05-29.md](benchmark-run-summary-2026-05-29.md).*
